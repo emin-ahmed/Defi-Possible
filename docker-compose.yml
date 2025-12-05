@@ -1,0 +1,147 @@
+services:
+  # Backend NestJS
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/mayanconnect
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-this-in-production}
+      JWT_EXPIRATION: 30m
+      MAYAN_URL: http://mayan:8000
+      MAYAN_API_TOKEN: ${MAYAN_API_TOKEN}
+      AI_SERVICE_URL: http://ai-service:8000
+      FRONTEND_URL: http://localhost:3000
+    depends_on:
+      - postgres
+      - redis
+      - mayan
+      - ai-service
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    command: npm run start:dev
+
+  # Frontend React
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: http://localhost:8001/api
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mayanconnect
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Redis for Bull Queue
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Mayan EDMS
+  mayan:
+    image: mayanedms/mayanedms:latest
+    restart: unless-stopped
+    environment:
+      MAYAN_DATABASE_ENGINE: django.db.backends.postgresql
+      MAYAN_DATABASE_HOST: postgres-mayan
+      MAYAN_DATABASE_NAME: mayan
+      MAYAN_DATABASE_USER: mayan
+      MAYAN_DATABASE_PASSWORD: mayanpassword
+      MAYAN_CELERY_BROKER_URL: redis://redis-mayan:6379/0
+      MAYAN_CELERY_RESULT_BACKEND: redis://redis-mayan:6379/1
+      MAYAN_LOCK_MANAGER_BACKEND: mayan.apps.lock_manager.backends.redis_lock.RedisLock
+      MAYAN_LOCK_MANAGER_BACKEND_ARGUMENTS: '{"redis_url":"redis://redis-mayan:6379/2"}'
+      MAYAN_OCR_AUTO_OCR: 'true'
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres-mayan
+      - redis-mayan
+    volumes:
+      - mayan_media:/var/lib/mayan
+      - mayan_data:/var/lib/mayan/document_storage
+
+  # Mayan PostgreSQL
+  postgres-mayan:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: mayan
+      POSTGRES_PASSWORD: mayanpassword
+      POSTGRES_DB: mayan
+    volumes:
+      - postgres_mayan_data:/var/lib/postgresql/data
+
+  # Mayan Redis
+  redis-mayan:
+    image: redis:7-alpine
+    volumes:
+      - redis_mayan_data:/data
+
+  # Ollama AI Service (Local)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: defi-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # AI Service for document analysis (using local Ollama)
+  ai-service:
+    build:
+      context: ./Ai-Service-for-summarizing-document-content
+      dockerfile: Dockerfile
+    container_name: defi-ai-service
+    restart: unless-stopped
+    ports:
+      - "5000:8000"
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - MODEL_NAME=llama3.2:3b
+      - MAX_TOKENS=500
+      - LOG_LEVEL=info
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
+  postgres_mayan_data:
+  redis_data:
+  redis_mayan_data:
+  mayan_media:
+  mayan_data:
+  ollama_data:
+
